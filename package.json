@@ -9,6 +9,7 @@
   "dependencies": {
     "cleverbot": "^1.0.1",
     "discord.js": "^11.5.1",
+    "json5": "^2.1.0",
     "request": "^2.88.0"
   }
 }
