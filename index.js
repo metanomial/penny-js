@@ -1,62 +1,121 @@
 const Discord = require('discord.js');
-const Config = require('./src/config');
-const Cleverbot = require('./src/cleverbot');
+const fetch = require('node-fetch');
 
-const config = new Config('./config.json5');
-const discord = new Discord.Client;
-const threads = new Map;
+// Check environment variables
+if(!process.env.CLEVERBOT_KEY) throw new Error('CLEVERBOT_KEY environment variable must be set.');
+if(!process.env.PENNY_LOG) throw new Error('PENNY_LOG environement variable must be set.');
+if(!process.env.PENNY_TOKEN) throw new Error('PENNY_TOKEN environement variable must be set.');
 
-discord.on('ready', () => {
-  const tag = discord.user.tag;
-  console.log(`Salutations! I'm logged in as ${ tag }`);
-});
+/**
+ * Discord.js client instance
+ * @type {Discord.Client}
+ * @see https://discord.js.org/#/docs/main/12.1.1/class/Client
+ */
+const discordClient = new Discord.Client;
 
-discord.on('message', message => {
-  
-  // Ignore self
-  if(message.author.id === discord.user.id) {
-    return;
-  }
+// Register Discord.js event listeners
+discordClient.on('ready', readyHandler);
+discordClient.on('message', messageHandler);
+discordClient.login(process.env.PENNY_TOKEN);
 
-  // Direct mention in a text channel
-  if(message.channel.type === 'text' && message.content.startsWith(`<@${ discord.user.id }>`)) {
-    const cleanContent = message.cleanContent
-      .slice(discord.user.username.length + 1)
-      .trim();
-    converse(cleanContent, message.author, message.channel);
-  }
+/**
+ * Log channel
+ * @type {Discord.TextChannel?}
+ */
+let logChannel;
 
-  // Direct message channel
-  if(message.channel.type === 'dm') {
-    const cleanContent = message.cleanContent.trim();
-    converse(cleanContent, message.author, message.channel);
-  }
-});
-
-function converse(message, author, channel) {
-  
-  // Start a new thread
-  if(!threads.has(author.id)) {
-    threads.set(author.id, new Cleverbot(config.get('cleverbotKey'), 25, 50, 75));
-  }
-  
-  // Log dialog
-  console.log(`<${ author.tag }>: ${ message }`);
-  
-  // Chat with penny
-  threads
-    .get(author.id)
-    .chat(message, reply => {
-      channel.send(reply);
-      console.log(`<Penny> ${reply}`);
-    });
+/**
+ * Send message to both predefined Discord log channel and console log
+ * @param {Discord.StringResolvable|Discord.APIMessage} content
+ * @param {Discord.MessageOptions|Discord.MessageAdditions} options
+ * @see https://discord.js.org/#/docs/main/12.1.1/class/TextChannel?scrollTo=send
+ */
+function pennyLog(content, options) {
+	console.log(content.toString());
+	if(logChannel) logChannel.send(content, options);
 }
 
-// Login
-config.load()
-  .then(config => {
-    const token = config.get('discordToken');
-    discord.login(token)
-      .catch(console.error);
-  })
-  .catch(console.error);
+/**
+ * Discord.js ready event handler
+ * @throws {Error} on failure to resolve log text channel
+ */
+async function readyHandler() {
+
+	// Resolve log channel
+	const channel = await discordClient.channels.fetch(process.env.PENNY_LOG);
+	if(!(channel instanceof Discord.TextChannel)) throw new Error('Log channel must be a text channel.');
+	logChannel = channel;
+	
+	// Login salutations
+	pennyLog(`Salutations! I'm logged in as ${ discordClient.user.tag }`);
+}
+
+/**
+ * Conversation threads
+ * @type {Map}
+ */
+const threads = new Map;
+
+/**
+ * Discord.js message event handler
+ * @param {Discord.Message} message
+ * @see https://discord.js.org/#/docs/main/12.1.1/class/Message
+ */
+async function messageHandler(message) {
+
+	// Ignore bots
+	if(message.author.bot) return;
+
+	// Handle direct messages or mentions
+	if(message.channel.type == 'dm' || message.mentions.has(discordClient.user)) {
+		
+		// Start conversation thread if needed
+		if(!threads.has(message.author.id))
+			threads.set(message.author.id, null);
+
+		// Replace instances of "Penny" with "Cleverbot"
+		const cleverText = message
+			.cleanContent
+			.replace(/Penny/g, 'Cleverbot');
+		
+		// Request URL
+		const url = new URL('/getreply', 'https://www.cleverbot.com/');
+		url.search = new URLSearchParams({
+			'key': process.env.CLEVERBOT_KEY,
+			'input': cleverText,
+			'cs': threads.get(message.author.id),
+			'cb_settings_tweak1': 25,
+			'cb_settings_tweak2': 50,
+			'cb_settings_tweak3': 75
+		});
+		
+		let replyText;
+		let state;
+
+		// Fetch chat bot reply
+		try {
+			const response = await fetch(url);
+			const data = await response.json();
+			replyText = data.output;
+			state = data.cs;
+		}
+
+		// Log failure to fetch chat bot reply
+		catch(err) {
+			return void pennyLog('Failed to fetch cleverbot reply. ```' + err + '```');
+		}
+
+		// Store conversation state
+		threads.set(message.author.id, state);
+		
+		// Replace instance of "Cleverbot" and greetings with "Penny" and Pennyisms
+		const pennyText = replyText
+			.replace(/Cleverbot/g, 'Penny')
+			.replace(/cleverbot/g, 'penny')
+			.replace(/^Hello/, 'Salutations')
+			.replace(/^hello/, 'salutations');
+
+		// Send a reply message on Discord 
+		message.channel.send(pennyText);
+	}
+}
