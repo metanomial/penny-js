@@ -76,7 +76,8 @@ async function messageHandler(message) {
 		// Replace instances of "Penny" with "Cleverbot"
 		const cleverText = message
 			.cleanContent
-			.replace(/Penny/g, 'Cleverbot');
+			.replace(/^penny/, '')
+			.replace(/penny/gi, 'Cleverbot');
 		
 		// Request URL
 		const url = new URL('/getreply', 'https://www.cleverbot.com/');
