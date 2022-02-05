@@ -6,7 +6,7 @@ const convos = new Map();
 export const bot = createBot({
   token: config.discord.token,
   botId: BigInt(config.discord.botId),
-  intents: ["Guilds", "GuildMessages"],
+  intents: ["Guilds", "GuildMessages", "DirectMessages"],
   events: { ready, messageCreate },
 });
 
@@ -19,7 +19,11 @@ async function messageCreate(
   message: DiscordenoMessage,
 ): Promise<void> {
   if (message.isBot) return;
-  if (message.mentionedUserIds.includes(bot.id)) {
+  if (
+    message.mentionedUserIds.includes(bot.id) ||
+    message.referencedMessage?.author.id == bot.id.toString() ||
+    message.guildId === undefined
+  ) {
     // Start conversation thread if needed
     if (!convos.has(message.authorId)) {
       convos.set(message.authorId, null);
@@ -28,8 +32,9 @@ async function messageCreate(
     // Replace instances of "Penny" with "Cleverbot"
     const cleverText = message
       .content
-      .replace(/^penny\s*[,:]?\s*/i, "")
-      .replace(/penny/gi, "Cleverbot");
+      .replaceAll("penny", "cleverbot")
+      .replaceAll("Penny", "Cleverbot")
+      .replace(/<@!\d+>/, "");
 
     // Request URL
     const url = new URL("/getreply", "https://www.cleverbot.com/");
