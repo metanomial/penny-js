@@ -1,0 +1,10 @@
+{
+  "cleverbot": {
+    "token": "<token>"
+  },
+  "discord": {
+    "token": "<token>",
+    "botId": "<botId>",
+    "logChannel": "<channel id>"
+  }
+}
