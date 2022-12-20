@@ -1,2 +1,3 @@
-# penny
-A discord bot with cleverbot integration
+# Penny
+
+A Discord bot with Cleverbot integration

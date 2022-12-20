@@ -1,82 +1,104 @@
-import config from "./config.json" assert { type: "json" };
-import { Bot, createBot, DiscordenoMessage, sendMessage } from "./deps.ts";
+import { createBot, Intents, Message, sendMessage, startBot } from "discordeno";
 
-const convos = new Map();
+import config from "./config.ts";
 
-export const bot = createBot({
-  token: config.discord.token,
-  botId: BigInt(config.discord.botId),
-  intents: ["Guilds", "GuildMessages", "DirectMessages"],
-  events: { ready, messageCreate },
+Deno.permissions.request({
+  name: "net",
+  host: "discord.com",
+});
+Deno.permissions.request({
+  name: "net",
+  host: "gateway.discord.gg",
 });
 
-async function ready(bot: Bot): Promise<void> {
-  await log(`Salutations! I'm logged in as application ${bot.applicationId}`);
+/** Penny Discord bot */
+const bot = createBot({
+  token: config.discord.token,
+  intents: Intents.Guilds | Intents.GuildMessages,
+});
+
+// Login event handler
+bot.events.ready = (_bot, { user }) => {
+  console.log(
+    `Salutations! I'm logged in as ${user.username}#${user.discriminator}`,
+  );
+};
+
+interface Conversation {
+  context?: string;
+  lastMessage: Date;
 }
 
-async function messageCreate(
-  bot: Bot,
-  message: DiscordenoMessage,
-): Promise<void> {
-  if (message.isBot) return;
-  if (
-    message.mentionedUserIds.includes(bot.id) ||
-    message.referencedMessage?.author.id == bot.id.toString() ||
-    message.guildId === undefined
-  ) {
-    // Start conversation thread if needed
-    if (!convos.has(message.authorId)) {
-      convos.set(message.authorId, null);
-    }
+const convos = new Map<bigint, Conversation>();
 
-    // Replace instances of "Penny" with "Cleverbot"
-    const cleverText = message
-      .content
-      .replaceAll("penny", "cleverbot")
-      .replaceAll("Penny", "Cleverbot")
-      .replace(/<@!\d+>/, "");
-
-    // Request URL
-    const url = new URL("/getreply", "https://www.cleverbot.com/");
-    url.search = new URLSearchParams({
-      key: config.cleverbot.token,
-      input: cleverText,
-      cb_settings_tweak1: "25",
-      cb_settings_tweak2: "50",
-      cv_settings_tweak3: "75",
-    }).toString();
-
-    let replyText: string;
-    let state: string;
-
-    // Fetch chat bot reply
-    try {
-      const response = await fetch(url);
-      const data = await response.json();
-      replyText = data.output;
-      state = data.cs;
-    } // Log failure to fetch chat bot reply
-    catch (err) {
-      return void log(`Failed to fetch Cleverbot reply. \`\`\`${err}\`\`\``);
-    }
-
-    // Store conversation state
-    convos.set(message.authorId, state);
-
-    // Replace instance of "Cleverbot" and greetings with "Penny" and Pennyisms
-    const pennyText = replyText
-      .replaceAll("Cleverbot", "Penny")
-      .replaceAll("cleverbot", "penny")
-      .replace(/^Hello/, "Salutations")
-      .replace(/^hello/, "salutations");
-
-    // Send a reply message on Discord
-    sendMessage(bot, message.channelId, {
-      content: pennyText,
+// Message event handler
+bot.events.messageCreate = async (bot, message) => {
+  if (message.isFromBot) return;
+  if (message.mentionedUserIds.includes(bot.id)) {
+    await makeReply(message).catch((error) => {
+      sendMessage(bot, config.discord.logChannel, {
+        content: `\`\`\`${error.message}\`\`\``,
+      });
     });
   }
+};
+
+async function makeReply(message: Message): Promise<void> {
+  // Start conversation thread if needed
+  if (!convos.has(message.authorId)) {
+    convos.set(message.authorId, {
+      lastMessage: new Date(),
+    });
+  }
+
+  // Replace instances of "Penny" with "Cleverbot"
+  const cleverText = message
+    .content
+    .replaceAll("penny", "cleverbot")
+    .replaceAll("Penny", "Cleverbot")
+    .replace("/<@!?\d+>/", "");
+
+  // Discard old conversation state if last message is older than 5 minutes
+  const conversation = convos.get(message.authorId) as Conversation;
+  const state = conversation.lastMessage.getTime() > Date.now() - 5 * 60 * 1000
+    ? conversation.context
+    : undefined;
+
+  // Request URL
+  const url = new URL("/getreply", "https://www.cleverbot.com/");
+  url.search = new URLSearchParams({
+    key: config.cleverbot.token,
+    input: cleverText,
+    cs: state ?? "",
+    cb_settings_tweak1: "25",
+    cb_settings_tweak2: "50",
+    cb_settings_tweak3: "75",
+  }).toString();
+
+  const response = await fetch(url);
+  const data = await response.json();
+  const { cs: newState, output: replyText } = data;
+
+  // Store conversation state
+  convos.set(message.authorId, {
+    context: newState,
+    lastMessage: new Date(),
+  });
+
+  // Replace instance of "Cleverbot" and greetings with "Penny" and Pennyisms
+  const pennyText = replyText
+    .replaceAll("Cleverbot", "Penny")
+    .replaceAll("cleverbot", "penny")
+    .replace(/^Hello/, "Salutations")
+    .replace(/^hello/, "salutations");
+
+  await sendMessage(bot, message.channelId, {
+    content: pennyText,
+    messageReference: {
+      messageId: message.id,
+      failIfNotExists: false,
+    },
+  });
 }
 
-async function log(content: string): Promise<void> {
-  await sendMessage(bot, BigInt(config.discord.logChannel), { content });
-}
+await startBot(bot);
